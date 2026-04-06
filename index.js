@@ -1,5 +1,5 @@
 /**
- * @agenttax/ampersend — Tax compliance layer for Ampersend x402 payments.
+ * @agenttax/ampersend -- Tax compliance layer for Ampersend x402 payments.
  *
  * Wraps any Ampersend X402Treasurer to automatically calculate sales tax
  * on every accepted payment. Tax results are attached to payment events
@@ -113,7 +113,7 @@ export function withTaxCompliance(treasurer, config) {
 
         if (amount <= 0) return;
 
-        // Determine buyer state — custom resolver or default
+        // Determine buyer state -- custom resolver or default
         const buyerState = resolveState
           ? resolveState(context, authorization)
           : defaultBuyerState;
