@@ -107,10 +107,9 @@ export function withTaxCompliance(treasurer, config) {
       if (status !== "accepted") return;
 
       try {
-        // Extract amount from the payment payload
-        const amount = authorization.payment?.amount
-          ? parseUsdcAmount(authorization.payment.amount)
-          : 0;
+        // Extract amount from the payment payload (x402 uses both .payment and .payload)
+        const rawAmount = authorization.payment?.amount || authorization.payload?.amount || 0;
+        const amount = rawAmount ? parseUsdcAmount(rawAmount) : 0;
 
         if (amount <= 0) return;
 
@@ -165,14 +164,14 @@ export function withTaxCompliance(treasurer, config) {
     getTaxSummary() {
       let totalAmount = 0;
       let totalTax = 0;
-      const byState = {};
+      const byJurisdiction = {};
 
       for (const entry of taxLog) {
         totalAmount += entry.amount;
         const tax = entry.tax?.total_tax || 0;
         totalTax += tax;
-        const state = entry.tax?.buyer_state || "unknown";
-        byState[state] = (byState[state] || 0) + tax;
+        const jurisdiction = entry.tax?.sales_tax?.jurisdiction || entry.tax?.buyer_state || "unknown";
+        byJurisdiction[jurisdiction] = (byJurisdiction[jurisdiction] || 0) + tax;
       }
 
       return {
@@ -180,7 +179,7 @@ export function withTaxCompliance(treasurer, config) {
         totalAmount: Math.round(totalAmount * 100) / 100,
         totalTax: Math.round(totalTax * 100) / 100,
         effectiveRate: totalAmount > 0 ? Math.round((totalTax / totalAmount) * 10000) / 10000 : 0,
-        byState,
+        byJurisdiction,
       };
     },
 
@@ -246,14 +245,14 @@ export function createTaxCalculator(config) {
     getTaxSummary() {
       let totalAmount = 0;
       let totalTax = 0;
-      const byState = {};
+      const byJurisdiction = {};
 
       for (const entry of taxLog) {
         totalAmount += entry.amount;
         const tax = entry.tax?.total_tax || 0;
         totalTax += tax;
-        const state = entry.tax?.buyer_state || "unknown";
-        byState[state] = (byState[state] || 0) + tax;
+        const jurisdiction = entry.tax?.sales_tax?.jurisdiction || entry.tax?.buyer_state || "unknown";
+        byJurisdiction[jurisdiction] = (byJurisdiction[jurisdiction] || 0) + tax;
       }
 
       return {
@@ -261,7 +260,7 @@ export function createTaxCalculator(config) {
         totalAmount: Math.round(totalAmount * 100) / 100,
         totalTax: Math.round(totalTax * 100) / 100,
         effectiveRate: totalAmount > 0 ? Math.round((totalTax / totalAmount) * 10000) / 10000 : 0,
-        byState,
+        byJurisdiction,
       };
     },
   };

@@ -1,6 +1,6 @@
 {
   "name": "@agenttax/ampersend",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tax compliance layer for Ampersend x402 agent payments — calculates sales tax on every transaction",
   "type": "module",
   "main": "index.js",
@@ -12,8 +12,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/AgentTax/AgentTax",
-    "directory": "integrations/ampersend"
+    "url": "https://github.com/AgentTax/agenttax-ampersend"
   },
   "homepage": "https://agenttax.io/integrations/ampersend",
   "peerDependencies": {

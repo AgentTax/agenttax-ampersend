@@ -30,7 +30,7 @@ export interface TaxSummary {
   totalAmount: number;
   totalTax: number;
   effectiveRate: number;
-  byState: Record<string, number>;
+  byJurisdiction: Record<string, number>;
 }
 
 export interface TaxComplianceConfig {

@@ -58,7 +58,7 @@ console.log(summary);
 //   totalAmount: 125.50,
 //   totalTax: 6.28,
 //   effectiveRate: 0.05,
-//   byState: { TX: 4.50, CA: 0, NY: 1.78 }
+//   byJurisdiction: { Texas: 4.50, California: 0, "New York": 1.78 }
 // }
 ```
 
