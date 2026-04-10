@@ -24,7 +24,7 @@ const AGENTTAX_BASE = "https://agenttax.io";
  * @param {object} opts
  * @returns {Promise<object>} Tax calculation result
  */
-async function calculateTax({ baseUrl, apiKey, amount, buyerState, transactionType, workType, isB2B, counterpartyId, role }) {
+async function calculateTax({ baseUrl, apiKey, amount, buyerState, transactionType, workType, isB2B, counterpartyId, role, timeoutMs = 30000 }) {
   const body = {
     role: role || "seller",
     amount,
@@ -38,13 +38,43 @@ async function calculateTax({ baseUrl, apiKey, amount, buyerState, transactionTy
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers["X-API-Key"] = apiKey;
 
-  const res = await fetch(`${baseUrl}/api/v1/calculate`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/api/v1/calculate`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
-  return res.json();
+  const text = await res.text();
+  let parsed;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    const err = new Error(`AgentTax ${res.status}: non-JSON response`);
+    err.status = res.status;
+    err.body = text.slice(0, 500);
+    throw err;
+  }
+  if (!res.ok) {
+    const err = new Error(`AgentTax ${res.status}: ${parsed?.error || parsed?.message || "request failed"}`);
+    err.status = res.status;
+    err.body = parsed;
+    throw err;
+  }
+  if (parsed?.success === false) {
+    const err = new Error(`AgentTax returned success=false: ${parsed?.error || "unknown"}`);
+    err.status = res.status;
+    err.body = parsed;
+    throw err;
+  }
+  return parsed;
 }
 
 /**
@@ -106,28 +136,30 @@ export function withTaxCompliance(treasurer, config) {
       // Only calculate tax on accepted (settled) payments
       if (status !== "accepted") return;
 
+      // Extract amount from the payment payload (x402 uses both .payment and .payload)
+      const rawAmount = authorization.payment?.amount || authorization.payload?.amount || 0;
+      const amount = rawAmount ? parseUsdcAmount(rawAmount) : 0;
+
+      if (amount <= 0) return;
+
+      // Determine buyer state -- custom resolver or default
+      const buyerState = resolveState
+        ? resolveState(context, authorization)
+        : defaultBuyerState;
+
+      if (!buyerState) return;
+
+      // Derive counterparty from payment context
+      const counterpartyId =
+        context?.metadata?.counterpartyId ||
+        context?.metadata?.sellerId ||
+        authorization.payment?.payTo ||
+        "ampersend_agent";
+
+      let taxResult = null;
+      let taxError = null;
       try {
-        // Extract amount from the payment payload (x402 uses both .payment and .payload)
-        const rawAmount = authorization.payment?.amount || authorization.payload?.amount || 0;
-        const amount = rawAmount ? parseUsdcAmount(rawAmount) : 0;
-
-        if (amount <= 0) return;
-
-        // Determine buyer state -- custom resolver or default
-        const buyerState = resolveState
-          ? resolveState(context, authorization)
-          : defaultBuyerState;
-
-        if (!buyerState) return;
-
-        // Derive counterparty from payment context
-        const counterpartyId =
-          context?.metadata?.counterpartyId ||
-          context?.metadata?.sellerId ||
-          authorization.payment?.payTo ||
-          "ampersend_agent";
-
-        const taxResult = await calculateTax({
+        taxResult = await calculateTax({
           baseUrl,
           apiKey,
           amount,
@@ -138,22 +170,30 @@ export function withTaxCompliance(treasurer, config) {
           counterpartyId: String(counterpartyId),
           role,
         });
-
-        const entry = {
-          authorizationId: authorization.authorizationId,
-          amount,
-          tax: taxResult,
-          timestamp: new Date().toISOString(),
-        };
-
-        taxLog.push(entry);
-
-        if (onTaxCalculated) {
-          onTaxCalculated(entry);
-        }
       } catch (err) {
-        // Tax calculation failure should never block payments
+        // Tax calculation failure should never block payments (payment is already settled)
+        // but it MUST be visible to the caller so compliance gaps can be reconciled.
+        taxError = { message: err.message, status: err.status, body: err.body };
         console.error("[agenttax/ampersend] Tax calculation failed:", err.message);
+      }
+
+      const entry = {
+        authorizationId: authorization.authorizationId,
+        amount,
+        buyerState,
+        tax: taxResult,
+        taxError,
+        timestamp: new Date().toISOString(),
+      };
+
+      taxLog.push(entry);
+
+      if (onTaxCalculated) {
+        try {
+          onTaxCalculated(entry);
+        } catch (cbErr) {
+          console.error("[agenttax/ampersend] onTaxCalculated callback failed:", cbErr.message);
+        }
       }
     },
 
@@ -164,10 +204,15 @@ export function withTaxCompliance(treasurer, config) {
     getTaxSummary() {
       let totalAmount = 0;
       let totalTax = 0;
+      let failed = 0;
       const byJurisdiction = {};
 
       for (const entry of taxLog) {
         totalAmount += entry.amount;
+        if (entry.taxError || !entry.tax) {
+          failed++;
+          continue;
+        }
         const tax = entry.tax?.total_tax || 0;
         totalTax += tax;
         const jurisdiction = entry.tax?.sales_tax?.jurisdiction || entry.tax?.buyer_state || "unknown";
@@ -176,6 +221,7 @@ export function withTaxCompliance(treasurer, config) {
 
       return {
         transactions: taxLog.length,
+        failed,
         totalAmount: Math.round(totalAmount * 100) / 100,
         totalTax: Math.round(totalTax * 100) / 100,
         effectiveRate: totalAmount > 0 ? Math.round((totalTax / totalAmount) * 10000) / 10000 : 0,
@@ -245,10 +291,15 @@ export function createTaxCalculator(config) {
     getTaxSummary() {
       let totalAmount = 0;
       let totalTax = 0;
+      let failed = 0;
       const byJurisdiction = {};
 
       for (const entry of taxLog) {
         totalAmount += entry.amount;
+        if (entry.taxError || !entry.tax) {
+          failed++;
+          continue;
+        }
         const tax = entry.tax?.total_tax || 0;
         totalTax += tax;
         const jurisdiction = entry.tax?.sales_tax?.jurisdiction || entry.tax?.buyer_state || "unknown";
@@ -257,6 +308,7 @@ export function createTaxCalculator(config) {
 
       return {
         transactions: taxLog.length,
+        failed,
         totalAmount: Math.round(totalAmount * 100) / 100,
         totalTax: Math.round(totalTax * 100) / 100,
         effectiveRate: totalAmount > 0 ? Math.round((totalTax / totalAmount) * 10000) / 10000 : 0,
